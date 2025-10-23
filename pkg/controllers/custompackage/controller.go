@@ -308,13 +308,20 @@ func (r *Reconciler) reconcileArgoCDSourceFromRemote(ctx context.Context, resour
 	cliStartTime, _ := util.GetCLIStartTimeAnnotationValue(resource.ObjectMeta.Annotations)
 
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, repo, func() error {
-		// Only prevent overwrites if GitRepository is already synced and owned by someone else
-		// This allows last-write-wins during initial setup, then locks it once synced
-		if repo.Status.Synced && len(repo.OwnerReferences) > 0 {
+		// Check if owned by a different CustomPackage
+		if len(repo.OwnerReferences) > 0 {
 			existingOwner := repo.OwnerReferences[0]
 			if existingOwner.UID != resource.UID {
-				// Already synced and owned by another CustomPackage, skip update
-				return nil
+				// Get the existing owner CustomPackage to compare creation times
+				existingPkg := &v1alpha1.CustomPackage{}
+				ownerKey := client.ObjectKey{Name: existingOwner.Name, Namespace: resource.Namespace}
+				if err := r.Client.Get(ctx, ownerKey, existingPkg); err == nil {
+					// Newer CustomPackage always wins - don't let older package overwrite
+					if existingPkg.CreationTimestamp.After(resource.CreationTimestamp.Time) {
+						return nil
+					}
+					// Fall through: I'm newer, take over from older package
+				}
 			}
 		}
 
@@ -371,13 +378,20 @@ func (r *Reconciler) reconcileArgoCDSourceFromLocal(ctx context.Context, resourc
 	cliStartTime, _ := util.GetCLIStartTimeAnnotationValue(resource.ObjectMeta.Annotations)
 
 	_, err = controllerutil.CreateOrUpdate(ctx, r.Client, repo, func() error {
-		// Only prevent overwrites if GitRepository is already synced and owned by someone else
-		// This allows last-write-wins during initial setup, then locks it once synced
-		if repo.Status.Synced && len(repo.OwnerReferences) > 0 {
+		// Check if owned by a different CustomPackage
+		if len(repo.OwnerReferences) > 0 {
 			existingOwner := repo.OwnerReferences[0]
 			if existingOwner.UID != resource.UID {
-				// Already synced and owned by another CustomPackage, skip update
-				return nil
+				// Get the existing owner CustomPackage to compare creation times
+				existingPkg := &v1alpha1.CustomPackage{}
+				ownerKey := client.ObjectKey{Name: existingOwner.Name, Namespace: resource.Namespace}
+				if err := r.Client.Get(ctx, ownerKey, existingPkg); err == nil {
+					// Newer CustomPackage always wins - don't let older package overwrite
+					if existingPkg.CreationTimestamp.After(resource.CreationTimestamp.Time) {
+						return nil
+					}
+					// Fall through: I'm newer, take over from older package
+				}
 			}
 		}
 
