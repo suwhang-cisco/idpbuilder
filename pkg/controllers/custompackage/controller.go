@@ -219,7 +219,12 @@ func (r *Reconciler) reconcileArgoCDApp(ctx context.Context, resource *v1alpha1.
 	}
 	resource.Status.GitRepositoryRefs = repoRefs
 	resource.Status.Synced = appSourcesSynced
-	return ctrl.Result{RequeueAfter: requeueTime}, nil
+
+	// Only requeue if not fully synced yet
+	if !appSourcesSynced {
+		return ctrl.Result{RequeueAfter: requeueTime}, nil
+	}
+	return ctrl.Result{}, nil
 }
 
 func (r *Reconciler) reconcileArgoCDAppSet(ctx context.Context, resource *v1alpha1.CustomPackage, appSet *argov1alpha1.ApplicationSet) (ctrl.Result, error) {
@@ -270,7 +275,11 @@ func (r *Reconciler) reconcileArgoCDAppSet(ctx context.Context, resource *v1alph
 
 	resource.Status.Synced = resource.Status.Synced && gitGeneratorsSynced
 
-	return ctrl.Result{RequeueAfter: requeueTime}, nil
+	// Only requeue if not fully synced yet
+	if !resource.Status.Synced {
+		return ctrl.Result{RequeueAfter: requeueTime}, nil
+	}
+	return ctrl.Result{}, nil
 }
 
 // create a gitrepository custom resource, then let the git repository controller take care of the rest
@@ -299,6 +308,23 @@ func (r *Reconciler) reconcileArgoCDSourceFromRemote(ctx context.Context, resour
 	cliStartTime, _ := util.GetCLIStartTimeAnnotationValue(resource.ObjectMeta.Annotations)
 
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, repo, func() error {
+		// Check if owned by a different CustomPackage
+		if len(repo.OwnerReferences) > 0 {
+			existingOwner := repo.OwnerReferences[0]
+			if existingOwner.UID != resource.UID {
+				// Get the existing owner CustomPackage to compare creation times
+				existingPkg := &v1alpha1.CustomPackage{}
+				ownerKey := client.ObjectKey{Name: existingOwner.Name, Namespace: resource.Namespace}
+				if err := r.Client.Get(ctx, ownerKey, existingPkg); err == nil {
+					// Newer CustomPackage always wins - don't let older package overwrite
+					if existingPkg.CreationTimestamp.After(resource.CreationTimestamp.Time) {
+						return nil
+					}
+					// Fall through: I'm newer, take over from older package
+				}
+			}
+		}
+
 		if err := controllerutil.SetControllerReference(resource, repo, r.Scheme); err != nil {
 			return err
 		}
@@ -352,6 +378,23 @@ func (r *Reconciler) reconcileArgoCDSourceFromLocal(ctx context.Context, resourc
 	cliStartTime, _ := util.GetCLIStartTimeAnnotationValue(resource.ObjectMeta.Annotations)
 
 	_, err = controllerutil.CreateOrUpdate(ctx, r.Client, repo, func() error {
+		// Check if owned by a different CustomPackage
+		if len(repo.OwnerReferences) > 0 {
+			existingOwner := repo.OwnerReferences[0]
+			if existingOwner.UID != resource.UID {
+				// Get the existing owner CustomPackage to compare creation times
+				existingPkg := &v1alpha1.CustomPackage{}
+				ownerKey := client.ObjectKey{Name: existingOwner.Name, Namespace: resource.Namespace}
+				if err := r.Client.Get(ctx, ownerKey, existingPkg); err == nil {
+					// Newer CustomPackage always wins - don't let older package overwrite
+					if existingPkg.CreationTimestamp.After(resource.CreationTimestamp.Time) {
+						return nil
+					}
+					// Fall through: I'm newer, take over from older package
+				}
+			}
+		}
+
 		if err := controllerutil.SetControllerReference(resource, repo, r.Scheme); err != nil {
 			return err
 		}
