@@ -298,33 +298,43 @@ func (r *Reconciler) reconcileArgoCDSourceFromRemote(ctx context.Context, resour
 	// no guarantee that this path exists
 	dirPath := filepath.Join(resource.Spec.RemoteRepository.Path, relativePath)
 
-	repo := &v1alpha1.GitRepository{
+	repoName := remoteRepoName(appName, dirPath, resource.Spec.RemoteRepository)
+	repo := &v1alpha1.GitRepository{}
+	repoKey := client.ObjectKey{Name: repoName, Namespace: resource.Namespace}
+
+	// Check if repo exists and if we should skip update
+	err := r.Client.Get(ctx, repoKey, repo)
+	if err == nil {
+		// Repo exists, check ownership
+		if len(repo.OwnerReferences) > 0 {
+			existingOwner := repo.OwnerReferences[0]
+			if existingOwner.UID != resource.UID {
+				// Get existing owner to compare timestamps
+				existingPkg := &v1alpha1.CustomPackage{}
+				ownerKey := client.ObjectKey{Name: existingOwner.Name, Namespace: resource.Namespace}
+				if err := r.Client.Get(ctx, ownerKey, existingPkg); err == nil {
+					// If owner is newer than me, don't overwrite
+					if existingPkg.CreationTimestamp.After(resource.CreationTimestamp.Time) {
+						return ctrl.Result{}, repo, nil
+					}
+				}
+			}
+		}
+	} else if !errors.IsNotFound(err) {
+		return ctrl.Result{}, nil, err
+	}
+
+	// Either repo doesn't exist, or I should take over
+	repo = &v1alpha1.GitRepository{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      remoteRepoName(appName, dirPath, resource.Spec.RemoteRepository),
+			Name:      repoName,
 			Namespace: resource.Namespace,
 		},
 	}
 
 	cliStartTime, _ := util.GetCLIStartTimeAnnotationValue(resource.ObjectMeta.Annotations)
 
-	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, repo, func() error {
-		// Check if owned by a different CustomPackage
-		if len(repo.OwnerReferences) > 0 {
-			existingOwner := repo.OwnerReferences[0]
-			if existingOwner.UID != resource.UID {
-				// Get the existing owner CustomPackage to compare creation times
-				existingPkg := &v1alpha1.CustomPackage{}
-				ownerKey := client.ObjectKey{Name: existingOwner.Name, Namespace: resource.Namespace}
-				if err := r.Client.Get(ctx, ownerKey, existingPkg); err == nil {
-					// Newer CustomPackage always wins - don't let older package overwrite
-					if existingPkg.CreationTimestamp.After(resource.CreationTimestamp.Time) {
-						return nil
-					}
-					// Fall through: I'm newer, take over from older package
-				}
-			}
-		}
-
+	_, err = controllerutil.CreateOrUpdate(ctx, r.Client, repo, func() error {
 		if err := controllerutil.SetControllerReference(resource, repo, r.Scheme); err != nil {
 			return err
 		}
@@ -368,9 +378,36 @@ func (r *Reconciler) reconcileArgoCDSourceFromLocal(ctx context.Context, resourc
 		return ctrl.Result{}, nil, err
 	}
 
-	repo := &v1alpha1.GitRepository{
+	repoName := localRepoName(appName, absPath)
+	repo := &v1alpha1.GitRepository{}
+	repoKey := client.ObjectKey{Name: repoName, Namespace: resource.Namespace}
+
+	// Check if repo exists and if we should skip update
+	err = r.Client.Get(ctx, repoKey, repo)
+	if err == nil {
+		// Repo exists, check ownership
+		if len(repo.OwnerReferences) > 0 {
+			existingOwner := repo.OwnerReferences[0]
+			if existingOwner.UID != resource.UID {
+				// Get existing owner to compare timestamps
+				existingPkg := &v1alpha1.CustomPackage{}
+				ownerKey := client.ObjectKey{Name: existingOwner.Name, Namespace: resource.Namespace}
+				if err := r.Client.Get(ctx, ownerKey, existingPkg); err == nil {
+					// If owner is newer than me, don't overwrite
+					if existingPkg.CreationTimestamp.After(resource.CreationTimestamp.Time) {
+						return ctrl.Result{}, repo, nil
+					}
+				}
+			}
+		}
+	} else if !errors.IsNotFound(err) {
+		return ctrl.Result{}, nil, err
+	}
+
+	// Either repo doesn't exist, or I should take over
+	repo = &v1alpha1.GitRepository{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      localRepoName(appName, absPath),
+			Name:      repoName,
 			Namespace: resource.Namespace,
 		},
 	}
@@ -378,23 +415,6 @@ func (r *Reconciler) reconcileArgoCDSourceFromLocal(ctx context.Context, resourc
 	cliStartTime, _ := util.GetCLIStartTimeAnnotationValue(resource.ObjectMeta.Annotations)
 
 	_, err = controllerutil.CreateOrUpdate(ctx, r.Client, repo, func() error {
-		// Check if owned by a different CustomPackage
-		if len(repo.OwnerReferences) > 0 {
-			existingOwner := repo.OwnerReferences[0]
-			if existingOwner.UID != resource.UID {
-				// Get the existing owner CustomPackage to compare creation times
-				existingPkg := &v1alpha1.CustomPackage{}
-				ownerKey := client.ObjectKey{Name: existingOwner.Name, Namespace: resource.Namespace}
-				if err := r.Client.Get(ctx, ownerKey, existingPkg); err == nil {
-					// Newer CustomPackage always wins - don't let older package overwrite
-					if existingPkg.CreationTimestamp.After(resource.CreationTimestamp.Time) {
-						return nil
-					}
-					// Fall through: I'm newer, take over from older package
-				}
-			}
-		}
-
 		if err := controllerutil.SetControllerReference(resource, repo, r.Scheme); err != nil {
 			return err
 		}
