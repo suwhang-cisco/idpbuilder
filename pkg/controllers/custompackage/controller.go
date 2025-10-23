@@ -294,6 +294,7 @@ func (r *Reconciler) reconcileArgoCDSource(ctx context.Context, resource *v1alph
 }
 
 func (r *Reconciler) reconcileArgoCDSourceFromRemote(ctx context.Context, resource *v1alpha1.CustomPackage, appName, repoURL string) (ctrl.Result, *v1alpha1.GitRepository, error) {
+	logger := log.FromContext(ctx)
 	relativePath := strings.TrimPrefix(repoURL, v1alpha1.CNOEURIScheme)
 	// no guarantee that this path exists
 	dirPath := filepath.Join(resource.Spec.RemoteRepository.Path, relativePath)
@@ -313,10 +314,25 @@ func (r *Reconciler) reconcileArgoCDSourceFromRemote(ctx context.Context, resour
 				existingPkg := &v1alpha1.CustomPackage{}
 				ownerKey := client.ObjectKey{Name: existingOwner.Name, Namespace: resource.Namespace}
 				if err := r.Client.Get(ctx, ownerKey, existingPkg); err == nil {
-					// If owner is newer than me, don't overwrite
-					if existingPkg.CreationTimestamp.After(resource.CreationTimestamp.Time) {
-						return ctrl.Result{}, repo, nil
+					// Compare package indices - higher index (later in --package args) wins
+					existingIdx := existingPkg.Annotations["cnoe.io/package-index"]
+					myIdx := resource.Annotations["cnoe.io/package-index"]
+
+					logger.V(1).Info("GitRepository ownership check",
+						"repo", repo.Name,
+						"currentOwner", existingPkg.Name,
+						"currentOwnerIdx", existingIdx,
+						"myName", resource.Name,
+						"myIdx", myIdx)
+
+					if existingIdx != "" && myIdx != "" {
+						// Compare package order
+						if existingIdx > myIdx {
+							logger.V(1).Info("Skipping - owner has higher package index", "repo", repo.Name)
+							return ctrl.Result{}, repo, nil
+						}
 					}
+					logger.V(1).Info("Taking over GitRepository", "repo", repo.Name, "from", existingPkg.Name)
 				}
 			}
 		}
@@ -393,10 +409,25 @@ func (r *Reconciler) reconcileArgoCDSourceFromLocal(ctx context.Context, resourc
 				existingPkg := &v1alpha1.CustomPackage{}
 				ownerKey := client.ObjectKey{Name: existingOwner.Name, Namespace: resource.Namespace}
 				if err := r.Client.Get(ctx, ownerKey, existingPkg); err == nil {
-					// If owner is newer than me, don't overwrite
-					if existingPkg.CreationTimestamp.After(resource.CreationTimestamp.Time) {
-						return ctrl.Result{}, repo, nil
+					// Compare package indices - higher index (later in --package args) wins
+					existingIdx := existingPkg.Annotations["cnoe.io/package-index"]
+					myIdx := resource.Annotations["cnoe.io/package-index"]
+
+					logger.V(1).Info("GitRepository ownership check",
+						"repo", repo.Name,
+						"currentOwner", existingPkg.Name,
+						"currentOwnerIdx", existingIdx,
+						"myName", resource.Name,
+						"myIdx", myIdx)
+
+					if existingIdx != "" && myIdx != "" {
+						// Compare package order
+						if existingIdx > myIdx {
+							logger.V(1).Info("Skipping - owner has higher package index", "repo", repo.Name)
+							return ctrl.Result{}, repo, nil
+						}
 					}
+					logger.V(1).Info("Taking over GitRepository", "repo", repo.Name, "from", existingPkg.Name)
 				}
 			}
 		}
